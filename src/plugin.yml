@@ -1,0 +1,9 @@
+author: brugnevom
+version: 1.0.0
+main: com.brugnevom.hypixelhits.HypixelHits.main
+name: HypixelHit
+depend: [ProtocolLib]
+
+commands:
+   reloadhit:
+      description: Reload the HypixelHit config
