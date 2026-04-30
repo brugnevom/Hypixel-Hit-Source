@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
@@ -41,8 +42,10 @@ import net.minecraft.server.v1_8_R3.EntityPlayer;
 
 public class main extends JavaPlugin {
 	public static Map<UUID, Integer> swingCount = new HashMap<>();
-	private final LocationHistoryManager historyManager = new LocationHistoryManager();
 	public static Plugin thisplugin;
+	
+	private final Map<UUID, LinkedList<Location>> historyMap = new HashMap<>();
+    private static int DELAY;
 	
 	public static int secondcount = 0;
 	public static double prohibitedCPS = 20;
@@ -53,6 +56,8 @@ public class main extends JavaPlugin {
 	public static String cpslimitingdesc = "CPS limiting (enable checking whether the comboer is clicking too much): ";
 	public static String cpslimitdesc = "CPS limit (hypixel comobing won't work if the player is clicking beyond this value in a second): ";
 	public static String thirdsprinthitdesc = "Third Sprint Hit (Enable sprint hit for the third combo hit): ";
+	public static String delaymovedesc = "Movement Tick Delay (Delay every player's movement by this value): ";
+	public static String consistantkbdesc = "Consistant KB (Combo KB feels more consistant, hit trading might be weird): ";
 	
 	public static String folderPath = Paths.get("").toAbsolutePath().toString() + File.separator + "plugins" + File.separator + "HypixelHit" + File.separator;
 	
@@ -80,7 +85,7 @@ public class main extends JavaPlugin {
 					
 					if(!shouldThirdSprintHit) {
 						if(runTick.victim != null && runTick.damager != null && runTick.nmsPlayer != null && runTick.nmsdPlayer != null) {
-							if(runTick.victim.getLocation().getY() >= runTick.groundy + 0.2 || runTick.hitcount >= 2) {
+							if(!runTick.victim.isOnGround()) {
 								runTick.damager.setSprinting(false);
 							} else runTick.damager.setSprinting(true);
 							//runTick.damager.setSprinting(true);
@@ -91,12 +96,6 @@ public class main extends JavaPlugin {
 			}
 			
 		}, 0, 0);
-		
-		Bukkit.getScheduler().runTaskTimer(this, () -> {
-            for (Player p : Bukkit.getOnlinePlayers()) {
-                historyManager.record(p.getUniqueId(), p.getLocation());
-            }
-        }, 0L, 1L);
 		
 	    ProtocolLibrary.getProtocolManager().addPacketListener(
 	        new PacketAdapter(this, ListenerPriority.NORMAL, PacketType.Play.Client.ARM_ANIMATION) {
@@ -118,21 +117,94 @@ public class main extends JavaPlugin {
 	                }
 	            }
 	        });
+	    
+	    Bukkit.getScheduler().runTaskTimer(this, () -> {
+	    	if(DELAY > 0) {
+	            for (Player subject : Bukkit.getOnlinePlayers()) {
+	                UUID uuid = subject.getUniqueId();
+	                historyMap.putIfAbsent(uuid, new LinkedList<>());
+	                LinkedList<Location> history = historyMap.get(uuid);
+	
+	                history.addLast(subject.getLocation().clone());
+	                if (!history.isEmpty()) {
+	                    Location delayedLoc = (history.size() > DELAY) ? history.removeFirst() : history.getFirst();
+	                    broadcastDelayedPosition(subject, delayedLoc);
+	                }
+	            }
+	    	}
+        }, 0L, 1L);
+
+	    ProtocolLibrary.getProtocolManager().addPacketListener(new PacketAdapter(this,
+                ListenerPriority.HIGHEST,
+                PacketType.Play.Server.ENTITY_TELEPORT,
+                PacketType.Play.Server.REL_ENTITY_MOVE,
+                PacketType.Play.Server.REL_ENTITY_MOVE_LOOK,
+                PacketType.Play.Server.ENTITY_LOOK,
+                PacketType.Play.Server.ENTITY_HEAD_ROTATION) {
+
+            @Override
+            public void onPacketSending(PacketEvent event) {
+            	if(DELAY > 0) {
+	                PacketContainer packet = event.getPacket();
+	                int entityId = packet.getIntegers().read(0);
+	                
+	                // Optimized check: Is this entity a player?
+	                Player subject = null;
+	                for (Player p : Bukkit.getOnlinePlayers()) {
+	                    if (p.getEntityId() == entityId) {
+	                        subject = p;
+	                        break;
+	                    }
+	                }
+	
+	                if (subject != null) {
+	                    if (event.getPlayer().getUniqueId().equals(subject.getUniqueId())) return;
+	                    
+	                    event.setCancelled(true);
+	                }
+            	}
+            }
+        });
 	}
 	public void resetSwingCounts() {
 	    swingCount.clear();
 	    runTick.shouldcustom = false;
 	}
 	
-	public void enableDesyncForPair(Player attacker, Player victim) {
-        ProtocolLibrary.getProtocolManager().addPacketListener(
-            new DesyncLogic(this, historyManager, attacker, victim)
-        );
+	private void broadcastDelayedPosition(Player subject, Location loc) {
+        // 1. Create Teleport Packet
+        PacketContainer teleport = new PacketContainer(PacketType.Play.Server.ENTITY_TELEPORT);
+        teleport.getIntegers().write(0, subject.getEntityId());
+        teleport.getIntegers().write(1, (int) Math.floor(loc.getX() * 32.0D));
+        teleport.getIntegers().write(2, (int) Math.floor(loc.getY() * 32.0D));
+        teleport.getIntegers().write(3, (int) Math.floor(loc.getZ() * 32.0D));
+        teleport.getBytes().write(0, (byte) (loc.getYaw() * 256.0F / 360.0F));
+        teleport.getBytes().write(1, (byte) (loc.getPitch() * 256.0F / 360.0F));
+        teleport.getBooleans().write(0, true);
+
+        // 2. Create Head Rotation Packet
+        PacketContainer headLook = new PacketContainer(PacketType.Play.Server.ENTITY_HEAD_ROTATION);
+        headLook.getIntegers().write(0, subject.getEntityId());
+        headLook.getBytes().write(0, (byte) (loc.getYaw() * 256.0F / 360.0F));
+
+        for (Player observer : Bukkit.getOnlinePlayers()) {
+            if (observer.getUniqueId().equals(subject.getUniqueId())) continue;
+
+            try {
+                // The 'false' parameter is KEY: it tells ProtocolLib NOT to trigger the listener we just wrote
+                ProtocolLibrary.getProtocolManager().sendServerPacket(observer, teleport, false);
+                ProtocolLibrary.getProtocolManager().sendServerPacket(observer, headLook, false);
+            } catch (Exception e) {
+                // Ignore errors from players disconnecting mid-tick
+            }
+        }
     }
-	
-	public LocationHistoryManager getHistoryManager() {
-        return historyManager;
-    }
+	private Player getPlayerByEntityId(int id) {
+	    for (Player p : Bukkit.getOnlinePlayers()) {
+	        if (p.getEntityId() == id) return p;
+	    }
+	    return null;
+	}
 
 	public static void read() {
 		try {
@@ -145,6 +217,8 @@ public class main extends JavaPlugin {
 				shouldCheckCPS = Boolean.parseBoolean(bfr.readLine().replace(cpslimitingdesc, ""));
 				prohibitedCPS = Double.parseDouble(bfr.readLine().replace(cpslimitdesc, ""));
 				shouldThirdSprintHit = Boolean.parseBoolean(bfr.readLine().replace(thirdsprinthitdesc, ""));
+				DELAY = Integer.parseInt(bfr.readLine().replace(delaymovedesc, ""));
+				runTick.consistantkb = Boolean.parseBoolean(bfr.readLine().replace(consistantkbdesc, ""));
 				
 				bfr.close();
 			} catch (IOException e) {
@@ -162,6 +236,8 @@ public class main extends JavaPlugin {
 					bf.write(cpslimitingdesc + true); bf.newLine();
 					bf.write(cpslimitdesc + 20); bf.newLine();
 					bf.write(thirdsprinthitdesc + false); bf.newLine();
+					bf.write(delaymovedesc + 2); bf.newLine();
+					bf.write(consistantkbdesc + true); bf.newLine();
 					
 					bf.close();
 				} catch (IOException e1) {

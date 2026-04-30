@@ -40,7 +40,7 @@ import com.comphenix.protocol.ProtocolLibrary;
 import net.md_5.bungee.api.ChatColor;
 
 public class runTick implements Listener {
-	public static boolean customhit = true, shouldcustom;
+	public static boolean customhit = true, shouldcustom, consistantkb;
 	public static int intmaxdmtick;
 	public static double damage, groundy;
 	public static int hitcount;
@@ -76,12 +76,18 @@ public class runTick implements Listener {
 			        event.setDamage(event.getDamage() * damage);
 			        victim.setMaximumNoDamageTicks(intmaxdmtick);
 			        
-//			        if(hitcount >= 1) {
-//				        Vector kb = new Vector(0, 0, 0);
-//			        	if(hitcount == 1) kb.setY(-0.3);
-//			        	if(hitcount == 2) kb.setY(-0.5);
-//				        victim.setVelocity(kb);
-//			        }
+			        if(consistantkb) {
+				        if(hitcount >= 1 && !victim.isOnGround()) {
+					        if(damager.getLocation().distance(victim.getLocation()) > 2.5) {
+						        if(nmsdPlayer.hurtTicks > 0) {
+							        Vector kb = new Vector(0, 0, 0);
+						        	if(hitcount == 1) kb.setY(-0.3);
+						        	if(hitcount == 2) kb.setY(-0.7);
+							        victim.setVelocity(kb);
+						        }
+					        }
+				        }
+			        }
 	        	} else {
 	        		victim.setMaximumNoDamageTicks(20);
 	        		event.setDamage(event.getDamage());
